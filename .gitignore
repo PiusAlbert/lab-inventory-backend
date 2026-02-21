@@ -1,0 +1,12 @@
+# Node
+node_modules/
+
+# Env files
+.env
+
+# Supabase local state
+.supabase/
+
+# OS
+.DS_Store
+Thumbs.db
