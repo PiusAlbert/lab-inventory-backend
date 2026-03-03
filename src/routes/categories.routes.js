@@ -9,7 +9,7 @@ router.get("/", async (req, res) => {
 
     const { data, error } = await supabase
       .from("categories")
-      .select("id, name, description, is_hazardous")
+      .select("*")
       .order("name");
 
     if (error) throw error;
