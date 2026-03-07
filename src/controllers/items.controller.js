@@ -1,11 +1,22 @@
-import { supabase } from '../config/supabase.js'
-import { v4 as uuidv4 } from 'uuid'
+import { getSupabase } from "../config/supabase.js";
+import { v4 as uuidv4 } from "uuid";
+
+const supabase = getSupabase();
 
 /**
  * Utility: Write Audit Log
  */
-async function writeAuditLog({ userId, labId, action, entity, entityId, oldData = null, newData = null }) {
-  await supabase.from('audit_logs').insert({
+async function writeAuditLog({
+  userId,
+  labId,
+  action,
+  entity,
+  entityId,
+  oldData = null,
+  newData = null
+}) {
+
+  const { error } = await supabase.from("audit_logs").insert({
     id: uuidv4(),
     user_id: userId,
     laboratory_id: labId,
@@ -15,7 +26,11 @@ async function writeAuditLog({ userId, labId, action, entity, entityId, oldData 
     old_data: oldData,
     new_data: newData,
     created_at: new Date()
-  })
+  });
+
+  if (error) {
+    console.error("Audit log error:", error);
+  }
 }
 
 /**
