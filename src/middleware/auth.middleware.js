@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js'
+const supabase = getSupabase();
 
 /**
  * VERIFY SUPABASE JWT
