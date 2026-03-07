@@ -1,18 +1,32 @@
-const express = require("express");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
 
-const categoriesRoutes = require("./routes/categories.routes");
+import categoriesRoutes from "./routes/categories.routes.js";
 
 const app = express();
+
+/**
+ * Global Middleware
+ */
 
 app.use(cors());
 app.use(express.json());
 
+/**
+ * Health Check
+ */
+
 app.get("/health", (req, res) => {
-  res.json({ status: "OK", service: "Lab Inventory Backend" });
+  res.json({
+    status: "OK",
+    service: "Lab Inventory Backend"
+  });
 });
 
-// API routes
+/**
+ * API Routes
+ */
+
 app.use("/api/categories", categoriesRoutes);
 
-module.exports = app;
+export default app;
