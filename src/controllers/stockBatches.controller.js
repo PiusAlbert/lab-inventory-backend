@@ -1,5 +1,7 @@
-import { supabase } from '../config/supabase.js'
-import { v4 as uuidv4 } from 'uuid'
+import { getSupabase } from "../config/supabase.js";
+import { v4 as uuidv4 } from "uuid";
+
+const supabase = getSupabase();
 
 /**
  * GET /api/batches
@@ -7,27 +9,31 @@ import { v4 as uuidv4 } from 'uuid'
  */
 export const getBatches = async (req, res) => {
 
-  const labId = req.user.laboratory_id
+  const labId = req.user.laboratory_id;
 
   try {
 
     const { data, error } = await supabase
-      .from('stock_batches')
+      .from("stock_batches")
       .select(`
         *,
         items(name, sku)
       `)
-      .eq('laboratory_id', labId)
-      .order('created_at', { ascending: false })
+      .eq("laboratory_id", labId)
+      .order("created_at", { ascending: false });
 
-    if (error) throw error
+    if (error) throw error;
 
-    res.json(data)
+    res.json(data);
 
   } catch (err) {
-    res.status(500).json({ error: err.message })
+
+    console.error("getBatches error:", err);
+
+    res.status(500).json({ error: err.message });
+
   }
-}
+};
 
 
 /**
@@ -35,26 +41,30 @@ export const getBatches = async (req, res) => {
  */
 export const getItemBatches = async (req, res) => {
 
-  const labId = req.user.laboratory_id
-  const itemId = req.params.id
+  const labId = req.user.laboratory_id;
+  const itemId = req.params.id;
 
   try {
 
     const { data, error } = await supabase
-      .from('stock_batches')
-      .select('*')
-      .eq('item_id', itemId)
-      .eq('laboratory_id', labId)
-      .order('expiry_date', { ascending: true })
+      .from("stock_batches")
+      .select("*")
+      .eq("item_id", itemId)
+      .eq("laboratory_id", labId)
+      .order("expiry_date", { ascending: true });
 
-    if (error) throw error
+    if (error) throw error;
 
-    res.json(data)
+    res.json(data);
 
   } catch (err) {
-    res.status(500).json({ error: err.message })
+
+    console.error("getItemBatches error:", err);
+
+    res.status(500).json({ error: err.message });
+
   }
-}
+};
 
 
 /**
@@ -63,8 +73,8 @@ export const getItemBatches = async (req, res) => {
  */
 export const createBatch = async (req, res) => {
 
-  const labId = req.user.laboratory_id
-  const userId = req.user.id
+  const labId = req.user.laboratory_id;
+  const userId = req.user.id;
 
   const {
     item_id,
@@ -72,7 +82,7 @@ export const createBatch = async (req, res) => {
     quantity_received,
     expiry_date,
     storage_location
-  } = req.body
+  } = req.body;
 
   try {
 
@@ -81,16 +91,16 @@ export const createBatch = async (req, res) => {
      */
 
     const { data: item } = await supabase
-      .from('items')
-      .select('id')
-      .eq('id', item_id)
-      .eq('laboratory_id', labId)
-      .single()
+      .from("items")
+      .select("id")
+      .eq("id", item_id)
+      .eq("laboratory_id", labId)
+      .single();
 
     if (!item) {
       return res.status(400).json({
-        error: 'Item does not belong to this laboratory'
-      })
+        error: "Item does not belong to this laboratory"
+      });
     }
 
     /**
@@ -99,14 +109,14 @@ export const createBatch = async (req, res) => {
 
     if (!quantity_received || quantity_received <= 0) {
       return res.status(400).json({
-        error: 'Quantity must be greater than zero'
-      })
+        error: "Quantity must be greater than zero"
+      });
     }
 
-    const batchId = uuidv4()
+    const batchId = uuidv4();
 
     const { error } = await supabase
-      .from('stock_batches')
+      .from("stock_batches")
       .insert({
         id: batchId,
         item_id,
@@ -118,26 +128,30 @@ export const createBatch = async (req, res) => {
         storage_location,
         created_by: userId,
         created_at: new Date()
-      })
+      });
 
-    if (error) throw error
+    if (error) throw error;
 
     /**
      * Return created batch
      */
 
     const { data: batch } = await supabase
-      .from('stock_batches')
+      .from("stock_batches")
       .select(`
         *,
         items(name, sku)
       `)
-      .eq('id', batchId)
-      .single()
+      .eq("id", batchId)
+      .single();
 
-    res.status(201).json(batch)
+    res.status(201).json(batch);
 
   } catch (err) {
-    res.status(500).json({ error: err.message })
+
+    console.error("createBatch error:", err);
+
+    res.status(500).json({ error: err.message });
+
   }
-}
+};

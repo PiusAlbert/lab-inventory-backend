@@ -1,20 +1,37 @@
-import { getDashboardMetrics } from '../services/dashboard.service.js'
+import { getDashboardMetrics } from "../services/dashboard.service.js";
 
 export const dashboard = async (req, res) => {
-
-  const labId = req.user.laboratory_id
-
   try {
 
-    const metrics = await getDashboardMetrics(labId)
+    /**
+     * Validate authenticated user
+     */
+    if (!req.user || !req.user.laboratory_id) {
+      return res.status(401).json({
+        error: "Unauthorized request"
+      });
+    }
 
-    res.json(metrics)
+    const labId = req.user.laboratory_id;
+
+    /**
+     * Fetch dashboard metrics
+     */
+    const metrics = await getDashboardMetrics(labId);
+
+    return res.status(200).json({
+      success: true,
+      data: metrics
+    });
 
   } catch (err) {
 
-    res.status(500).json({
-      error: 'Failed to load dashboard'
-    })
+    console.error("Dashboard error:", err);
+
+    return res.status(500).json({
+      success: false,
+      error: "Failed to load dashboard metrics"
+    });
 
   }
-}
+};
