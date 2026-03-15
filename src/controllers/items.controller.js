@@ -1,4 +1,4 @@
-import getSupabase from "../config/supabase.js";
+import { getSupabase } from "../config/supabase.js";
 import { v4 as uuidv4 } from "uuid";
 
 /**
