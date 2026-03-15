@@ -32,7 +32,7 @@ router.get(
   '/',
   getItems
 )
-
+router.get('/search', searchItems)
 /**
  * GET /api/items/:id
  */
@@ -71,6 +71,6 @@ router.delete(
   deleteItem
 )
 
-router.get('/search', searchItems)
+
 
 export default router

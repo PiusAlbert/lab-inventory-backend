@@ -1,7 +1,5 @@
 import { getSupabase } from "../config/supabase.js";
 
-const supabase = getSupabase();
-
 /**
  * VERIFY SUPABASE JWT
  * - Validates token
@@ -9,6 +7,7 @@ const supabase = getSupabase();
  * - Injects req.user
  */
 export const verifyToken = async (req, res, next) => {
+  const supabase = getSupabase();
   try {
 
     const authHeader = req.headers.authorization;

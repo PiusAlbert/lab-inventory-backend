@@ -1,8 +1,7 @@
 import { getSupabase } from "../config/supabase.js";
 
-const supabase = getSupabase();
-
 export const registerUser = async (req, res) => {
+  const supabase = getSupabase();
   try {
     const { email, password, laboratory_id, role } = req.body;
 

@@ -1,13 +1,12 @@
 import { getSupabase } from "../config/supabase.js";
 import { v4 as uuidv4 } from "uuid";
 
-const supabase = getSupabase();
 
 /**
  * GET /api/transactions
  */
 export const getTransactions = async (req, res) => {
-
+  const supabase = getSupabase();
   const labId = req.user.laboratory_id;
 
   try {
@@ -36,116 +35,56 @@ export const getTransactions = async (req, res) => {
 
 };
 
-
 /**
- * ISSUE STOCK (FIFO)
+ * ISSUE STOCK (Atomic via RPC)
  */
 export const issueStock = async (req, res) => {
+  const supabase = getSupabase()
 
-  const labId = req.user.laboratory_id;
-  const userId = req.user.id;
+  const labId = req.user.laboratory_id
+  const userId = req.user.id
 
-  const { item_id, quantity, reference, notes } = req.body;
+  const { item_id, quantity, reference, notes } = req.body
 
   try {
 
     if (!quantity || quantity <= 0) {
-      return res.status(400).json({ error: "Invalid quantity" });
+      return res.status(400).json({ error: "Invalid quantity" })
     }
 
-    /**
-     * Fetch batches ordered FIFO
-     */
+    const { error } = await supabase.rpc("issue_stock_fifo", {
+      p_item_id: item_id,
+      p_lab_id: labId,
+      p_quantity: quantity,
+      p_reference: reference,
+      p_notes: notes,
+      p_user_id: userId
+    })
 
-    const { data: batches, error: batchFetchError } = await supabase
-      .from("stock_batches")
-      .select("*")
-      .eq("item_id", item_id)
-      .eq("laboratory_id", labId)
-      .gt("current_quantity", 0)
-      .order("expiry_date", { ascending: true });
-
-    if (batchFetchError) throw batchFetchError;
-
-    if (!batches || batches.length === 0) {
-      return res.status(400).json({
-        error: "No available stock"
-      });
-    }
-
-    let remaining = quantity;
-
-    for (const batch of batches) {
-
-      if (remaining <= 0) break;
-
-      const deduct = Math.min(batch.current_quantity, remaining);
-
-      const newQty = batch.current_quantity - deduct;
-
-      /**
-       * Update batch quantity
-       */
-
-      const { error: batchError } = await supabase
-        .from("stock_batches")
-        .update({
-          current_quantity: newQty
-        })
-        .eq("id", batch.id);
-
-      if (batchError) throw batchError;
-
-      /**
-       * Insert transaction
-       */
-
-      const { error: trxError } = await supabase
-        .from("stock_transactions")
-        .insert({
-          id: uuidv4(),
-          item_id,
-          batch_id: batch.id,
-          laboratory_id: labId,
-          transaction_type: "ISSUE",
-          quantity: deduct,
-          reference,
-          notes,
-          created_by: userId,
-          created_at: new Date()
-        });
-
-      if (trxError) throw trxError;
-
-      remaining -= deduct;
-    }
-
-    if (remaining > 0) {
-      return res.status(400).json({
-        error: "Insufficient stock"
-      });
+    if (error) {
+      return res.status(400).json({ error: error.message })
     }
 
     res.status(201).json({
       message: "Stock issued successfully"
-    });
+    })
 
   } catch (err) {
 
-    console.error("issueStock error:", err);
+    console.error("issueStock error:", err)
 
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: "Failed to issue stock"
+    })
 
   }
-
-};
-
+}
 
 /**
  * RECEIVE STOCK
  */
 export const receiveStock = async (req, res) => {
-
+  const supabase = getSupabase();
   const labId = req.user.laboratory_id;
   const userId = req.user.id;
 

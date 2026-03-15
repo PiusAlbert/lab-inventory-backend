@@ -1,14 +1,12 @@
 import { getSupabase } from "../config/supabase.js";
 import { v4 as uuidv4 } from "uuid";
 
-const supabase = getSupabase();
-
 /**
  * GET /api/batches
  * Get all batches for the user's lab
  */
 export const getBatches = async (req, res) => {
-
+  const supabase = getSupabase();
   const labId = req.user.laboratory_id;
 
   try {
@@ -40,7 +38,7 @@ export const getBatches = async (req, res) => {
  * GET /api/items/:id/batches
  */
 export const getItemBatches = async (req, res) => {
-
+  const supabase = getSupabase();
   const labId = req.user.laboratory_id;
   const itemId = req.params.id;
 
@@ -72,7 +70,7 @@ export const getItemBatches = async (req, res) => {
  * Receive stock
  */
 export const createBatch = async (req, res) => {
-
+  const supabase = getSupabase();
   const labId = req.user.laboratory_id;
   const userId = req.user.id;
 

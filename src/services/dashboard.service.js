@@ -1,9 +1,8 @@
 import { getSupabase } from "../config/supabase.js";
 
-const supabase = getSupabase();
-
 export const getDashboardMetrics = async (labId) => {
-
+  
+  const supabase = getSupabase();
   try {
 
     /**

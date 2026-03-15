@@ -1,17 +1,27 @@
 import express from "express";
 import { getSupabase } from "../config/supabase.js";
 
+import { verifyToken } from "../middleware/auth.middleware.js";
+import { requireRole } from "../middleware/role.middleware.js";
+
 const router = express.Router();
 
-/* GET ALL */
-router.get("/", async (req, res) => {
+/**
+ * GET ALL CATEGORIES
+ * Authenticated users only
+ */
+router.get("/", verifyToken, async (req, res) => {
+
   try {
 
     const supabase = getSupabase();
 
+    const labId = req.user.laboratory_id;
+
     const { data, error } = await supabase
       .from("categories")
       .select("*")
+      .eq("laboratory_id", labId)
       .order("name");
 
     if (error) throw error;
@@ -25,86 +35,140 @@ router.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
 
   }
+
 });
 
-/* CREATE */
-router.post("/", async (req, res) => {
-  try {
 
-    const { name, description, is_hazardous } = req.body;
+/**
+ * CREATE CATEGORY
+ * Only LAB_MANAGER or SUPER_ADMIN
+ */
+router.post(
+  "/",
+  verifyToken,
+  requireRole("LAB_MANAGER", "SUPER_ADMIN"),
+  async (req, res) => {
 
-    const supabase = getSupabase();
+    try {
 
-    const { data, error } = await supabase
-      .from("categories")
-      .insert([{ name, description, is_hazardous }])
-      .select();
+      const { name, description, is_hazardous } = req.body;
 
-    if (error) throw error;
+      const labId = req.user.laboratory_id;
 
-    res.status(201).json(data[0]);
+      const supabase = getSupabase();
 
-  } catch (err) {
+      const { data, error } = await supabase
+        .from("categories")
+        .insert([
+          {
+            name,
+            description,
+            is_hazardous,
+            laboratory_id: labId
+          }
+        ])
+        .select();
 
-    console.error("Create category error:", err);
+      if (error) throw error;
 
-    res.status(500).json({ error: err.message });
+      res.status(201).json(data[0]);
+
+    } catch (err) {
+
+      console.error("Create category error:", err);
+
+      res.status(500).json({ error: err.message });
+
+    }
 
   }
-});
+);
 
-/* UPDATE */
-router.put("/:id", async (req, res) => {
-  try {
 
-    const { id } = req.params;
-    const { name, description, is_hazardous } = req.body;
+/**
+ * UPDATE CATEGORY
+ * Only LAB_MANAGER or SUPER_ADMIN
+ */
+router.put(
+  "/:id",
+  verifyToken,
+  requireRole("LAB_MANAGER", "SUPER_ADMIN"),
+  async (req, res) => {
 
-    const supabase = getSupabase();
+    try {
 
-    const { data, error } = await supabase
-      .from("categories")
-      .update({ name, description, is_hazardous })
-      .eq("id", id)
-      .select();
+      const { id } = req.params;
 
-    if (error) throw error;
+      const { name, description, is_hazardous } = req.body;
 
-    res.json(data[0]);
+      const labId = req.user.laboratory_id;
 
-  } catch (err) {
+      const supabase = getSupabase();
 
-    console.error("Update category error:", err);
+      const { data, error } = await supabase
+        .from("categories")
+        .update({
+          name,
+          description,
+          is_hazardous
+        })
+        .eq("id", id)
+        .eq("laboratory_id", labId)
+        .select();
 
-    res.status(500).json({ error: err.message });
+      if (error) throw error;
 
-  }
-});
+      res.json(data[0]);
 
-/* DELETE */
-router.delete("/:id", async (req, res) => {
-  try {
+    } catch (err) {
 
-    const { id } = req.params;
+      console.error("Update category error:", err);
 
-    const supabase = getSupabase();
+      res.status(500).json({ error: err.message });
 
-    const { error } = await supabase
-      .from("categories")
-      .delete()
-      .eq("id", id);
-
-    if (error) throw error;
-
-    res.json({ message: "Category deleted" });
-
-  } catch (err) {
-
-    console.error("Delete category error:", err);
-
-    res.status(500).json({ error: err.message });
+    }
 
   }
-});
+);
+
+
+/**
+ * DELETE CATEGORY
+ * Only SUPER_ADMIN
+ */
+router.delete(
+  "/:id",
+  verifyToken,
+  requireRole("SUPER_ADMIN"),
+  async (req, res) => {
+
+    try {
+
+      const { id } = req.params;
+
+      const labId = req.user.laboratory_id;
+
+      const supabase = getSupabase();
+
+      const { error } = await supabase
+        .from("categories")
+        .delete()
+        .eq("id", id)
+        .eq("laboratory_id", labId);
+
+      if (error) throw error;
+
+      res.json({ message: "Category deleted" });
+
+    } catch (err) {
+
+      console.error("Delete category error:", err);
+
+      res.status(500).json({ error: err.message });
+
+    }
+
+  }
+);
 
 export default router;
