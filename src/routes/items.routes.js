@@ -1,76 +1,45 @@
-import express from 'express'
+import express from "express";
 import {
   getItems,
+  searchItems,
   getItemById,
   createItem,
   updateItem,
   deleteItem
-} from '../controllers/items.controller.js'
+} from "../controllers/items.controller.js";
 
-import { verifyToken } from '../middleware/auth.middleware.js'
-import { requireRole } from '../middleware/role.middleware.js'
-import { searchItems } from '../controllers/items.controller.js'
+import { verifyToken }  from "../middleware/auth.middleware.js";
+import { requireRole }  from "../middleware/role.middleware.js";
 
-const router = express.Router()
+const router = express.Router();
 
-/* =========================================================
-   GLOBAL MIDDLEWARE
-   All routes require authentication
-========================================================= */
-
-router.use(verifyToken)
-
-/* =========================================================
-   ROUTES
-========================================================= */
+router.use(verifyToken);
 
 /**
- * GET /api/items
- * Accessible to all authenticated lab users
+ * GET /api/items/search
+ * Must be declared BEFORE /:id to avoid being shadowed by the wildcard
  */
-router.get(
-  '/',
-  getItems
-)
-router.get('/search', searchItems)
-/**
- * GET /api/items/:id
- */
-router.get(
-  '/:id',
-  getItemById
-)
+router.get("/search", searchItems);
 
-/**
- * POST /api/items
- * Only LAB_MANAGER and SUPER_ADMIN can create
- */
+router.get("/",    getItems);
+router.get("/:id", getItemById);
+
 router.post(
-  '/',
-  requireRole(['LAB_MANAGER', 'SUPER_ADMIN']),
+  "/",
+  requireRole(["LAB_MANAGER", "SUPER_ADMIN"]),
   createItem
-)
+);
 
-/**
- * PUT /api/items/:id
- * Only LAB_MANAGER and SUPER_ADMIN can update
- */
 router.put(
-  '/:id',
-  requireRole(['LAB_MANAGER', 'SUPER_ADMIN']),
+  "/:id",
+  requireRole(["LAB_MANAGER", "SUPER_ADMIN"]),
   updateItem
-)
+);
 
-/**
- * DELETE /api/items/:id
- * Only LAB_MANAGER and SUPER_ADMIN can deactivate
- */
 router.delete(
-  '/:id',
-  requireRole(['LAB_MANAGER', 'SUPER_ADMIN']),
+  "/:id",
+  requireRole(["LAB_MANAGER", "SUPER_ADMIN"]),
   deleteItem
-)
+);
 
-
-
-export default router
+export default router;

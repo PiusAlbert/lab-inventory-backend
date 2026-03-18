@@ -149,6 +149,25 @@ export const searchItems = async (req, res) => {
   }
 };
 
+export const getTransactions = async (req, res) => {
+  const supabase = getSupabase()
+  const labId = req.user.laboratory_id
+  const { item_id } = req.query   // ← new
+
+  let query = supabase
+    .from("stock_transactions")
+    .select(`id, transaction_type, quantity, reference, created_at,
+             items ( name, sku, unit_of_measure )`)
+    .eq("laboratory_id", labId)
+    .order("created_at", { ascending: false })
+    .limit(50)
+
+  if (item_id) query = query.eq("item_id", item_id)  // ← new
+
+  const { data, error } = await query
+  if (error) return res.status(500).json({ error: error.message })
+  res.json(data)
+}
 /**
  * GET ITEM BY ID
  */

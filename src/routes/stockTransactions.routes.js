@@ -21,6 +21,10 @@ router.post(
   issueStock
 )
 
+// Add to stockTransactions.routes.js — filter transactions by item_id query param
+router.get('/', getTransactions)
+// becomes:
+// GET /api/transactions?item_id=abc123 — backend filters before returning
 router.post(
   '/receive',
   requireRole(['LAB_MANAGER','STORE_KEEPER']),
