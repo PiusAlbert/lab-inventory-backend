@@ -1,5 +1,15 @@
 import { getSupabase } from "../config/supabase.js";
 
+/**
+ * Live schema facts:
+ *
+ * stock_transactions — HAS: item_id, laboratory_id, reference, notes,
+ *                           created_by, created_at, transaction_type (text)
+ * categories         — NO laboratory_id (global)
+ * items              — HAS laboratory_id
+ * stock_batches      — HAS laboratory_id, item_id
+ */
+
 export const getDashboardMetrics = async (labId) => {
 
   const supabase = getSupabase();
@@ -7,17 +17,15 @@ export const getDashboardMetrics = async (labId) => {
   try {
 
     /**
-     * Total distinct items in this lab via stock_batches
-     * items table has no laboratory_id — ownership lives in stock_batches
+     * Total distinct items in this lab
      */
-    const { data: labItems, error: totalError } = await supabase
+    const { data: labBatches, error: totalError } = await supabase
       .from("stock_batches")
       .select("item_id")
       .eq("laboratory_id", labId);
 
     if (totalError) throw totalError;
-
-    const totalItems = new Set(labItems.map(b => b.item_id)).size;
+    const totalItems = new Set(labBatches.map(b => b.item_id)).size;
 
 
     /**
@@ -30,7 +38,7 @@ export const getDashboardMetrics = async (labId) => {
 
 
     /**
-     * Low stock items list — actionable rows for the alert panel
+     * Low stock items list
      */
     const { data: allBatches, error: batchListError } = await supabase
       .from("stock_batches")
@@ -75,7 +83,7 @@ export const getDashboardMetrics = async (labId) => {
 
 
     /**
-     * Expiring batches list — batches expiring within 30 days
+     * Expiring batches list — within 30 days
      */
     const today    = new Date();
     const in30Days = new Date();
@@ -83,10 +91,7 @@ export const getDashboardMetrics = async (labId) => {
 
     const { data: expiringBatches, error: expiringListError } = await supabase
       .from("stock_batches")
-      .select(`
-        id, batch_number, expiry_date, current_quantity,
-        items ( name, sku, unit_of_measure )
-      `)
+      .select(`id, batch_number, expiry_date, current_quantity, items ( name, sku, unit_of_measure )`)
       .eq("laboratory_id", labId)
       .gt("current_quantity", 0)
       .lte("expiry_date", in30Days.toISOString().split("T")[0])
@@ -107,13 +112,19 @@ export const getDashboardMetrics = async (labId) => {
 
 
     /**
-     * Recent transactions — last 10
+     * Recent transactions — direct query using item_id and laboratory_id
+     * which both exist on stock_transactions in the live schema.
      */
     const { data: recentTransactions, error: trxError } = await supabase
       .from("stock_transactions")
       .select(`
-        id, transaction_type, quantity, reference, created_at,
-        items ( name, sku, unit_of_measure )
+        id,
+        transaction_type,
+        quantity,
+        reference,
+        notes,
+        created_at,
+        items ( id, name, sku, unit_of_measure )
       `)
       .eq("laboratory_id", labId)
       .order("created_at", { ascending: false })
@@ -136,8 +147,7 @@ export const getDashboardMetrics = async (labId) => {
     const categoryMap = {};
     batchData.forEach(batch => {
       const catName = batch.items?.categories?.name ?? "Uncategorised";
-      categoryMap[catName] =
-        (categoryMap[catName] || 0) + Number(batch.current_quantity);
+      categoryMap[catName] = (categoryMap[catName] || 0) + Number(batch.current_quantity);
     });
 
     const stock_by_category = Object.entries(categoryMap)
