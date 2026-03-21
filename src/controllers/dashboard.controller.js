@@ -3,21 +3,18 @@ import { getDashboardMetrics } from "../services/dashboard.service.js";
 export const dashboard = async (req, res) => {
   try {
 
-    /**
-     * Validate authenticated user
-     */
-    if (!req.user || !req.user.laboratory_id) {
-      return res.status(401).json({
-        error: "Unauthorized request"
-      });
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const labId = req.user.laboratory_id;
-
     /**
-     * Fetch dashboard metrics
+     * SUPER_ADMIN with no lab selected → labId is null → show all-labs aggregate.
+     * Regular users always have a labId.
+     * We no longer reject null labId here — dashboard.service handles both cases.
      */
-    const metrics = await getDashboardMetrics(labId);
+    const labId = req.user.laboratory_id ?? null;
+
+    const metrics = await getDashboardMetrics(labId, req.user.is_admin);
 
     return res.status(200).json({
       success: true,
@@ -25,13 +22,10 @@ export const dashboard = async (req, res) => {
     });
 
   } catch (err) {
-
     console.error("Dashboard error:", err);
-
     return res.status(500).json({
       success: false,
       error: "Failed to load dashboard metrics"
     });
-
   }
 };

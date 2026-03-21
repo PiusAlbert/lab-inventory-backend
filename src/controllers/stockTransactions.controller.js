@@ -2,25 +2,17 @@ import { getSupabase } from "../config/supabase.js";
 import { v4 as uuidv4 } from "uuid";
 
 /**
- * Live stock_transactions schema:
- *   id, item_id, batch_id, laboratory_id, transaction_type (text),
- *   quantity, reference, notes, created_by, created_at
- *
- * transaction_type is plain text — use "ISSUE" / "RECEIVE" to match
- * what the frontend expects and what was always intended.
+ * labId null  = SUPER_ADMIN, no lab selected → return all transactions unfiltered
+ * labId uuid  = scoped to that specific lab
  */
 
-/**
- * GET /api/transactions
- */
 export const getTransactions = async (req, res) => {
 
   const supabase = getSupabase();
-  const labId = req.user.laboratory_id;
+  const labId    = req.user.laboratory_id ?? null;
 
   try {
-
-    const { data, error } = await supabase
+    let query = supabase
       .from("stock_transactions")
       .select(`
         id,
@@ -32,10 +24,13 @@ export const getTransactions = async (req, res) => {
         items ( id, name, sku, unit_of_measure ),
         stock_batches ( batch_number )
       `)
-      .eq("laboratory_id", labId)
       .order("created_at", { ascending: false })
       .limit(100);
 
+    // Only filter by lab when a specific lab is in scope
+    if (labId) query = query.eq("laboratory_id", labId);
+
+    const { data, error } = await query;
     if (error) throw error;
 
     res.json(data);
@@ -47,20 +42,22 @@ export const getTransactions = async (req, res) => {
 };
 
 
-/**
- * POST /api/transactions/issue
- * Issues stock using FIFO across batches for the given item.
- */
 export const issueStock = async (req, res) => {
 
   const supabase = getSupabase();
-  const labId  = req.user.laboratory_id;
-  const userId = req.user.id;
+  const labId    = req.user.laboratory_id;
+  const userId   = req.user.id;
+
+  // SUPER_ADMIN must select a lab before issuing
+  if (!labId) {
+    return res.status(400).json({
+      error: "Please select a laboratory before issuing stock"
+    });
+  }
 
   const { item_id, quantity, reference, notes } = req.body;
 
   try {
-
     const qty = Number(quantity);
     if (!qty || qty <= 0) {
       return res.status(400).json({ error: "Invalid quantity" });
@@ -69,9 +66,6 @@ export const issueStock = async (req, res) => {
       return res.status(400).json({ error: "item_id is required" });
     }
 
-    /**
-     * Fetch available batches FIFO (earliest expiry first)
-     */
     const { data: batches, error: batchFetchError } = await supabase
       .from("stock_batches")
       .select("*")
@@ -140,20 +134,22 @@ export const issueStock = async (req, res) => {
 };
 
 
-/**
- * POST /api/transactions/receive
- * Adds quantity to an existing batch and logs the transaction.
- */
 export const receiveStock = async (req, res) => {
 
   const supabase = getSupabase();
-  const labId  = req.user.laboratory_id;
-  const userId = req.user.id;
+  const labId    = req.user.laboratory_id;
+  const userId   = req.user.id;
+
+  // SUPER_ADMIN must select a lab before receiving
+  if (!labId) {
+    return res.status(400).json({
+      error: "Please select a laboratory before receiving stock"
+    });
+  }
 
   const { item_id, batch_id, quantity, reference, notes } = req.body;
 
   try {
-
     const qty = Number(quantity);
     if (!qty || qty <= 0) {
       return res.status(400).json({ error: "Invalid quantity" });

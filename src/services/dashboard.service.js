@@ -1,63 +1,59 @@
 import { getSupabase } from "../config/supabase.js";
 
 /**
- * Live schema facts:
+ * getDashboardMetrics
  *
- * stock_transactions — HAS: item_id, laboratory_id, reference, notes,
- *                           created_by, created_at, transaction_type (text)
- * categories         — NO laboratory_id (global)
- * items              — HAS laboratory_id
- * stock_batches      — HAS laboratory_id, item_id
+ * labId = null  → SUPER_ADMIN, no lab selected → aggregate across ALL labs
+ * labId = uuid  → scoped to that specific lab
  */
-
-export const getDashboardMetrics = async (labId) => {
+export const getDashboardMetrics = async (labId, isAdmin = false) => {
 
   const supabase = getSupabase();
+  const allLabs  = isAdmin && !labId;  // true = show everything unfiltered
 
   try {
 
     /**
-     * Total distinct items in this lab
+     * Total distinct items
      */
-    const { data: labBatches, error: totalError } = await supabase
-      .from("stock_batches")
-      .select("item_id")
-      .eq("laboratory_id", labId);
-
+    let batchQuery = supabase.from("stock_batches").select("item_id, laboratory_id");
+    if (!allLabs) batchQuery = batchQuery.eq("laboratory_id", labId);
+    const { data: labBatches, error: totalError } = await batchQuery;
     if (totalError) throw totalError;
     const totalItems = new Set(labBatches.map(b => b.item_id)).size;
 
 
     /**
      * Low stock count via RPC
+     * RPC requires a lab_id — skip when showing all labs
      */
-    const { data: lowStockCount, error: lowStockError } = await supabase
-      .rpc("low_stock_items_count", { lab_id: labId });
-
-    if (lowStockError) throw lowStockError;
+    let lowStockCount = 0;
+    if (!allLabs) {
+      const { data, error } = await supabase
+        .rpc("low_stock_items_count", { lab_id: labId });
+      if (!error) lowStockCount = data ?? 0;
+    }
 
 
     /**
      * Low stock items list
      */
-    const { data: allBatches, error: batchListError } = await supabase
-      .from("stock_batches")
-      .select("item_id, current_quantity")
-      .eq("laboratory_id", labId);
-
+    let allBatchQuery = supabase.from("stock_batches").select("item_id, current_quantity");
+    if (!allLabs) allBatchQuery = allBatchQuery.eq("laboratory_id", labId);
+    const { data: allBatches, error: batchListError } = await allBatchQuery;
     if (batchListError) throw batchListError;
 
     const stockMap = {};
-    allBatches.forEach(b => {
+    (allBatches || []).forEach(b => {
       stockMap[b.item_id] = (stockMap[b.item_id] || 0) + Number(b.current_quantity);
     });
 
-    const { data: itemsList, error: itemsListError } = await supabase
+    let itemsQuery = supabase
       .from("items")
       .select("id, name, sku, minimum_threshold, unit_of_measure")
-      .eq("laboratory_id", labId)
       .eq("is_active", true);
-
+    if (!allLabs) itemsQuery = itemsQuery.eq("laboratory_id", labId);
+    const { data: itemsList, error: itemsListError } = await itemsQuery;
     if (itemsListError) throw itemsListError;
 
     const lowStockItems = (itemsList || [])
@@ -68,84 +64,104 @@ export const getDashboardMetrics = async (labId) => {
         sku:               item.sku,
         current_stock:     stockMap[item.id] || 0,
         minimum_threshold: item.minimum_threshold,
-        unit_of_measure:   item.unit_of_measure
+        unit_of_measure:   item.unit_of_measure,
       }))
       .slice(0, 10);
 
+    if (allLabs) lowStockCount = lowStockItems.length;
+
 
     /**
-     * Expiring batches count via RPC
+     * Expiring batches count via RPC (lab-scoped only)
      */
-    const { data: expiringSoon, error: expiryError } = await supabase
-      .rpc("expiring_batches_count", { lab_id: labId });
-
-    if (expiryError) throw expiryError;
+    let expiringSoon = 0;
+    if (!allLabs) {
+      const { data, error } = await supabase
+        .rpc("expiring_batches_count", { lab_id: labId });
+      if (!error) expiringSoon = data ?? 0;
+    }
 
 
     /**
-     * Expiring batches list — within 30 days
+     * Expiring batches list
      */
     const today    = new Date();
     const in30Days = new Date();
     in30Days.setDate(today.getDate() + 30);
 
-    const { data: expiringBatches, error: expiringListError } = await supabase
+    let expiryQuery = supabase
       .from("stock_batches")
-      .select(`id, batch_number, expiry_date, current_quantity, items ( name, sku, unit_of_measure )`)
-      .eq("laboratory_id", labId)
+      .select(`id, batch_number, expiry_date, current_quantity,
+               items ( name, sku, unit_of_measure )`)
       .gt("current_quantity", 0)
       .lte("expiry_date", in30Days.toISOString().split("T")[0])
       .gte("expiry_date", today.toISOString().split("T")[0])
       .order("expiry_date", { ascending: true })
       .limit(10);
+    if (!allLabs) expiryQuery = expiryQuery.eq("laboratory_id", labId);
 
+    const { data: expiringBatches, error: expiringListError } = await expiryQuery;
     if (expiringListError) throw expiringListError;
+    if (allLabs) expiringSoon = expiringBatches?.length ?? 0;
 
 
     /**
-     * Inventory value via RPC
+     * Inventory value via RPC (lab-scoped only)
      */
-    const { data: inventoryValue, error: valueError } = await supabase
-      .rpc("inventory_total_value", { lab_id: labId });
-
-    if (valueError) throw valueError;
+    let inventoryValue = 0;
+    if (!allLabs) {
+      const { data, error } = await supabase
+        .rpc("inventory_total_value", { lab_id: labId });
+      if (!error) inventoryValue = data ?? 0;
+    }
 
 
     /**
-     * Recent transactions — direct query using item_id and laboratory_id
-     * which both exist on stock_transactions in the live schema.
+     * Recent transactions — join through stock_batches for lab filter
      */
-    const { data: recentTransactions, error: trxError } = await supabase
+    const { data: rawTrx, error: trxError } = await supabase
       .from("stock_transactions")
       .select(`
-        id,
-        transaction_type,
-        quantity,
-        reference,
-        notes,
-        created_at,
-        items ( id, name, sku, unit_of_measure )
+        id, transaction_type, quantity, reference, notes, created_at,
+        stock_batches (
+          laboratory_id,
+          batch_number,
+          items ( id, name, sku, unit_of_measure )
+        )
       `)
-      .eq("laboratory_id", labId)
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(200);
 
     if (trxError) throw trxError;
 
+    const recentTransactions = (rawTrx || [])
+      .filter(t => allLabs || t.stock_batches?.laboratory_id === labId)
+      .slice(0, 10)
+      .map(t => ({
+        id:               t.id,
+        transaction_type: t.transaction_type,
+        quantity:         t.quantity,
+        reference:        t.reference,
+        notes:            t.notes,
+        created_at:       t.created_at,
+        items:            t.stock_batches?.items ?? null,
+      }));
+
 
     /**
-     * Stock by category for bar chart
+     * Stock by category
      */
-    const { data: batchData, error: catError } = await supabase
+    let catQuery = supabase
       .from("stock_batches")
       .select(`current_quantity, items ( categories ( name ) )`)
-      .eq("laboratory_id", labId)
       .gt("current_quantity", 0);
+    if (!allLabs) catQuery = catQuery.eq("laboratory_id", labId);
 
+    const { data: batchData, error: catError } = await catQuery;
     if (catError) throw catError;
 
     const categoryMap = {};
-    batchData.forEach(batch => {
+    (batchData || []).forEach(batch => {
       const catName = batch.items?.categories?.name ?? "Uncategorised";
       categoryMap[catName] = (categoryMap[catName] || 0) + Number(batch.current_quantity);
     });
@@ -156,19 +172,19 @@ export const getDashboardMetrics = async (labId) => {
 
 
     return {
-      total_items:         totalItems         || 0,
-      low_stock:           lowStockCount      || 0,
-      expiring_soon:       expiringSoon       || 0,
-      inventory_value:     inventoryValue     || 0,
-      low_stock_items:     lowStockItems      || [],
-      expiring_batches:    expiringBatches    || [],
-      recent_transactions: recentTransactions || [],
-      stock_by_category
+      total_items:         totalItems      || 0,
+      low_stock:           lowStockCount   || 0,
+      expiring_soon:       expiringSoon    || 0,
+      inventory_value:     inventoryValue  || 0,
+      low_stock_items:     lowStockItems   || [],
+      expiring_batches:    expiringBatches || [],
+      recent_transactions: recentTransactions,
+      stock_by_category,
+      is_all_labs:         allLabs,
     };
 
   } catch (err) {
     console.error("Dashboard metrics error:", err);
     throw err;
   }
-
 };

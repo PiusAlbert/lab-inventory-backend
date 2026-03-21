@@ -1,12 +1,13 @@
 import express from "express";
 import cors from "cors";
 
-import authRoutes        from "./routes/auth.routes.js";
-import categoriesRoutes  from "./routes/categories.routes.js";
-import itemsRoutes       from "./routes/items.routes.js";
-import batchRoutes       from "./routes/stockBatches.routes.js";
-import transactionRoutes from "./routes/stockTransactions.routes.js";
-import dashboardRoutes   from "./routes/dashboard.routes.js";
+import authRoutes         from "./routes/auth.routes.js";
+import categoriesRoutes   from "./routes/categories.routes.js";
+import itemsRoutes        from "./routes/items.routes.js";
+import batchRoutes        from "./routes/stockBatches.routes.js";
+import transactionRoutes  from "./routes/stockTransactions.routes.js";
+import dashboardRoutes    from "./routes/dashboard.routes.js";
+import laboratoriesRoutes from "./routes/laboratories.routes.js";
 
 const app = express();
 
@@ -14,7 +15,7 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || "*",
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  allowedHeaders: ["Content-Type", "Authorization", "x-lab-id"]
 }));
 
 app.use(express.json());
@@ -29,6 +30,7 @@ app.use("/api/items",        itemsRoutes);
 app.use("/api/batches",      batchRoutes);
 app.use("/api/transactions", transactionRoutes);
 app.use("/api/dashboard",    dashboardRoutes);
+app.use("/api/laboratories", laboratoriesRoutes);
 
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
