@@ -1,36 +1,38 @@
 import express from "express";
-import cors from "cors";
+import cors    from "cors";
 
-import authRoutes         from "./routes/auth.routes.js";
-import categoriesRoutes   from "./routes/categories.routes.js";
-import itemsRoutes        from "./routes/items.routes.js";
-import batchRoutes        from "./routes/stockBatches.routes.js";
-import transactionRoutes  from "./routes/stockTransactions.routes.js";
-import dashboardRoutes    from "./routes/dashboard.routes.js";
+import authRoutes        from "./routes/auth.routes.js";
+import categoriesRoutes  from "./routes/categories.routes.js";
+import itemsRoutes       from "./routes/items.routes.js";
+import batchRoutes       from "./routes/stockBatches.routes.js";
+import transactionRoutes from "./routes/stockTransactions.routes.js";
+import dashboardRoutes   from "./routes/dashboard.routes.js";
 import laboratoriesRoutes from "./routes/laboratories.routes.js";
+import reportsRoutes     from "./routes/reports.routes.js";
 
 const app = express();
 
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "*",
+  origin:      process.env.CORS_ORIGIN || "*",
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-lab-id"]
+  methods:     ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-lab-id"],
 }));
 
 app.use(express.json());
 
-app.get("/health", (req, res) => {
-  res.json({ status: "OK", service: "Lab Inventory Backend" });
-});
+// Health check — used by uptime monitors to keep Render awake
+app.get("/health",     (req, res) => res.json({ status: "OK", service: "Lab Inventory Backend" }));
+app.get("/api/health", (req, res) => res.json({ status: "OK", service: "Lab Inventory Backend" }));
 
-app.use("/api/auth",         authRoutes);
-app.use("/api/categories",   categoriesRoutes);
-app.use("/api/items",        itemsRoutes);
-app.use("/api/batches",      batchRoutes);
-app.use("/api/transactions", transactionRoutes);
-app.use("/api/dashboard",    dashboardRoutes);
-app.use("/api/laboratories", laboratoriesRoutes);
+app.use("/api/auth",          authRoutes);
+app.use("/api/categories",    categoriesRoutes);
+app.use("/api/items",         itemsRoutes);
+app.use("/api/batches",       batchRoutes);
+app.use("/api/transactions",  transactionRoutes);
+app.use("/api/dashboard",     dashboardRoutes);
+app.use("/api/laboratories",  laboratoriesRoutes);
+app.use("/api/reports",       reportsRoutes);
 
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
