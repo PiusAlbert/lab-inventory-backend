@@ -1,25 +1,38 @@
-import express from 'express'
+import express from 'express';
+import { verifyToken } from '../middleware/auth.middleware.js';
+import { requireRole } from '../middleware/role.middleware.js';
 import {
   getBatches,
-  getItemBatches,
-  createBatch
-} from '../controllers/stockBatches.controller.js'
+  getBatchesByItem,
+  receiveBatch,
+  updateBatch,
+  deleteBatch,
+} from '../controllers/stockBatches.controller.js';
 
-import { verifyToken } from '../middleware/auth.middleware.js'
-import { requireRole } from '../middleware/role.middleware.js'
+const router = express.Router();
 
-const router = express.Router()
+// Apply auth to every batches route
+router.use(verifyToken);
 
-router.use(verifyToken)
-
-router.get('/', getBatches)
-
-router.get('/item/:id', getItemBatches)
+router.get('/',                getBatches);
+router.get('/item/:itemId',    getBatchesByItem);
 
 router.post(
   '/',
-  requireRole(['LAB_MANAGER', 'STORE_KEEPER']),
-  createBatch
-)
+  requireRole(['LAB_MANAGER', 'STORE_KEEPER', 'SUPER_ADMIN', 'ADMIN']),
+  receiveBatch
+);
 
-export default router
+router.put(
+  '/:id',
+  requireRole(['LAB_MANAGER', 'STORE_KEEPER', 'SUPER_ADMIN', 'ADMIN']),
+  updateBatch
+);
+
+router.delete(
+  '/:id',
+  requireRole(['LAB_MANAGER', 'SUPER_ADMIN', 'ADMIN']),
+  deleteBatch
+);
+
+export default router;
