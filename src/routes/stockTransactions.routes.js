@@ -13,8 +13,6 @@ const router = express.Router()
 
 router.use(verifyToken)
 
-router.get('/', getTransactions)
-
 router.post(
   '/issue',
   requireRole(['LAB_MANAGER','STORE_KEEPER','TECHNICIAN']),
