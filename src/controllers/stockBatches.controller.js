@@ -25,8 +25,16 @@ async function writeAuditLog({
   entityId,
   oldData = null,
   newData = null,
+  reason = null,
 }) {
   const supabase = getSupabase();
+
+  const details = {
+    old_data: oldData,
+    new_data: newData,
+  };
+
+  if (reason) details.reason = reason;
 
   const { error } = await supabase.from("audit_logs").insert({
     id: uuidv4(),
@@ -35,7 +43,7 @@ async function writeAuditLog({
     table_affected: entity,
     record_id: entityId,
     created_at: new Date(),
-    details: { old_data: oldData, new_data: newData },
+    details,
   });
 
   if (error) {
@@ -55,6 +63,27 @@ function normalizeNullableString(value) {
 
   const trimmed = String(value).trim();
   return trimmed === "" ? null : trimmed;
+}
+
+async function getIssuedQuantityForBatch(batchId) {
+  const supabase = getSupabase();
+
+  const { data, error } = await supabase
+    .from("stock_transactions")
+    .select("quantity, transaction_type")
+    .eq("batch_id", batchId);
+
+  if (error) throw error;
+
+  return (data || []).reduce((sum, row) => {
+    if (row.transaction_type === "ISSUE") {
+      return sum + Number(row.quantity || 0);
+    }
+    if (row.transaction_type === "RECEIVE") {
+      return sum - Number(row.quantity || 0);
+    }
+    return sum;
+  }, 0);
 }
 
 export const getBatches = async (req, res) => {
@@ -169,7 +198,6 @@ export const receiveBatch = async (req, res) => {
       return res.status(400).json({ error: "Invalid quantity" });
     }
 
-    // Fetch item for conversion and lab ownership verification
     const { data: item, error: itemErr } = await supabase
       .from("items")
       .select("id, laboratory_id, unit_of_measure, dispensing_unit, conversion_factor")
@@ -245,6 +273,21 @@ export const receiveBatch = async (req, res) => {
   }
 };
 
+/**
+ * PUT /api/batches/:id
+ *
+ * Supports correction of:
+ * - quantity_received
+ * - current_quantity
+ * - expiry_date
+ * - storage_location
+ *
+ * Soft locks:
+ * - reason is required for any batch correction
+ * - values cannot be negative
+ * - current_quantity cannot exceed quantity_received
+ * - quantity_received cannot be reduced below the amount already issued
+ */
 export const updateBatch = async (req, res) => {
   const supabase = getSupabase();
   const labId = req.user.laboratory_id ?? null;
@@ -275,6 +318,14 @@ export const updateBatch = async (req, res) => {
       return res.status(404).json({ error: "Batch not found" });
     }
 
+    const reason = normalizeNullableString(req.body.reason);
+
+    if (!reason) {
+      return res.status(400).json({
+        error: "A correction reason is required when editing a batch",
+      });
+    }
+
     const hasQtyReceived = Object.prototype.hasOwnProperty.call(req.body, "quantity_received");
     const hasCurrentQty = Object.prototype.hasOwnProperty.call(req.body, "current_quantity");
     const hasExpiry = Object.prototype.hasOwnProperty.call(req.body, "expiry_date");
@@ -303,6 +354,26 @@ export const updateBatch = async (req, res) => {
     if (currentQuantity > quantityReceived) {
       return res.status(400).json({
         error: "Available quantity cannot be greater than received quantity",
+      });
+    }
+
+    const issuedQuantity = await getIssuedQuantityForBatch(id);
+
+    if (quantityReceived < issuedQuantity) {
+      return res.status(400).json({
+        error: `Received quantity cannot be reduced below the quantity already issued (${issuedQuantity})`,
+      });
+    }
+
+    const minimumAllowedCurrent = 0;
+    const maximumAllowedCurrent = quantityReceived;
+
+    if (
+      currentQuantity < minimumAllowedCurrent ||
+      currentQuantity > maximumAllowedCurrent
+    ) {
+      return res.status(400).json({
+        error: `Available quantity must be between ${minimumAllowedCurrent} and ${maximumAllowedCurrent}`,
       });
     }
 
@@ -350,6 +421,7 @@ export const updateBatch = async (req, res) => {
       entityId: id,
       oldData: existingBatch,
       newData: updates,
+      reason,
     });
 
     return res.json(updatedBatch);
@@ -389,7 +461,6 @@ export const deleteBatch = async (req, res) => {
       return res.status(404).json({ error: "Batch not found" });
     }
 
-    // Prevent deleting a batch that already has transaction history
     const { count, error: trxError } = await supabase
       .from("stock_transactions")
       .select("id", { count: "exact", head: true })

@@ -1,190 +1,212 @@
-import { getSupabase } from "../config/supabase.js";
+import { getSupabase } from "../config/supabase.js"
 
-/**
- * getDashboardMetrics
- *
- * labId = null  → SUPER_ADMIN, no lab selected → aggregate across ALL labs
- * labId = uuid  → scoped to that specific lab
- */
-export const getDashboardMetrics = async (labId, isAdmin = false) => {
+function addToMap(map, key, value) {
+  map.set(key, (map.get(key) || 0) + Number(value || 0))
+}
 
-  const supabase = getSupabase();
-  const allLabs  = isAdmin && !labId;  // true = show everything unfiltered
+function daysUntil(dateStr) {
+  if (!dateStr) return null
+  const diff = new Date(dateStr) - new Date()
+  return Math.ceil(diff / (1000 * 60 * 60 * 24))
+}
 
-  try {
+export async function getDashboardMetrics(labId = null, isAdmin = false) {
+  const supabase = getSupabase()
+  const isAllLabs = !labId
 
-    /**
-     * Total distinct items
-     */
-    let batchQuery = supabase.from("stock_batches").select("item_id, laboratory_id");
-    if (!allLabs) batchQuery = batchQuery.eq("laboratory_id", labId);
-    const { data: labBatches, error: totalError } = await batchQuery;
-    if (totalError) throw totalError;
-    const totalItems = new Set(labBatches.map(b => b.item_id)).size;
+  // 1. Load items
+  let itemsQuery = supabase
+    .from("items")
+    .select(`
+      id,
+      laboratory_id,
+      category_id,
+      name,
+      sku,
+      unit_of_measure,
+      dispensing_unit,
+      minimum_threshold,
+      unit_price,
+      categories ( name )
+    `)
 
+  if (labId) itemsQuery = itemsQuery.eq("laboratory_id", labId)
 
-    /**
-     * Low stock count via RPC
-     * RPC requires a lab_id — skip when showing all labs
-     */
-    let lowStockCount = 0;
-    if (!allLabs) {
-      const { data, error } = await supabase
-        .rpc("low_stock_items_count", { lab_id: labId });
-      if (!error) lowStockCount = data ?? 0;
-    }
+  const { data: items, error: itemsError } = await itemsQuery
+  if (itemsError) throw itemsError
 
+  // 2. Load stock batches
+  let batchesQuery = supabase
+    .from("stock_batches")
+    .select(`
+      id,
+      item_id,
+      laboratory_id,
+      batch_number,
+      quantity_received,
+      current_quantity,
+      expiry_date,
+      storage_location,
+      received_at,
+      items (
+        id,
+        name,
+        sku,
+        unit_of_measure,
+        dispensing_unit,
+        minimum_threshold,
+        laboratory_id,
+        categories ( name )
+      )
+    `)
 
-    /**
-     * Low stock items list
-     */
-    let allBatchQuery = supabase.from("stock_batches").select("item_id, current_quantity");
-    if (!allLabs) allBatchQuery = allBatchQuery.eq("laboratory_id", labId);
-    const { data: allBatches, error: batchListError } = await allBatchQuery;
-    if (batchListError) throw batchListError;
+  if (labId) batchesQuery = batchesQuery.eq("laboratory_id", labId)
 
-    const stockMap = {};
-    (allBatches || []).forEach(b => {
-      stockMap[b.item_id] = (stockMap[b.item_id] || 0) + Number(b.current_quantity);
-    });
+  const { data: batches, error: batchesError } = await batchesQuery
+  if (batchesError) throw batchesError
 
-    let itemsQuery = supabase
-      .from("items")
-      .select("id, name, sku, minimum_threshold, unit_of_measure")
-      .eq("is_active", true);
-    if (!allLabs) itemsQuery = itemsQuery.eq("laboratory_id", labId);
-    const { data: itemsList, error: itemsListError } = await itemsQuery;
-    if (itemsListError) throw itemsListError;
+  // 3. Load recent transactions
+  let trxQuery = supabase
+    .from("stock_transactions")
+    .select(`
+      id,
+      item_id,
+      batch_id,
+      laboratory_id,
+      transaction_type,
+      quantity,
+      reference,
+      notes,
+      created_at,
+      items ( id, name, sku, unit_of_measure ),
+      stock_batches ( batch_number )
+    `)
+    .order("created_at", { ascending: false })
+    .limit(10)
 
-    const lowStockItems = (itemsList || [])
-      .filter(item => (stockMap[item.id] || 0) < Number(item.minimum_threshold))
-      .map(item => ({
-        id:                item.id,
-        name:              item.name,
-        sku:               item.sku,
-        current_stock:     stockMap[item.id] || 0,
-        minimum_threshold: item.minimum_threshold,
-        unit_of_measure:   item.unit_of_measure,
-      }))
-      .slice(0, 10);
+  if (labId) trxQuery = trxQuery.eq("laboratory_id", labId)
 
-    if (allLabs) lowStockCount = lowStockItems.length;
+  const { data: recentTransactions, error: trxError } = await trxQuery
+  if (trxError) throw trxError
 
-
-    /**
-     * Expiring batches count via RPC (lab-scoped only)
-     */
-    let expiringSoon = 0;
-    if (!allLabs) {
-      const { data, error } = await supabase
-        .rpc("expiring_batches_count", { lab_id: labId });
-      if (!error) expiringSoon = data ?? 0;
-    }
-
-
-    /**
-     * Expiring batches list
-     */
-    const today    = new Date();
-    const in30Days = new Date();
-    in30Days.setDate(today.getDate() + 30);
-
-    let expiryQuery = supabase
-      .from("stock_batches")
-      .select(`id, batch_number, expiry_date, current_quantity,
-               items ( name, sku, unit_of_measure )`)
-      .gt("current_quantity", 0)
-      .lte("expiry_date", in30Days.toISOString().split("T")[0])
-      .gte("expiry_date", today.toISOString().split("T")[0])
-      .order("expiry_date", { ascending: true })
-      .limit(10);
-    if (!allLabs) expiryQuery = expiryQuery.eq("laboratory_id", labId);
-
-    const { data: expiringBatches, error: expiringListError } = await expiryQuery;
-    if (expiringListError) throw expiringListError;
-    if (allLabs) expiringSoon = expiringBatches?.length ?? 0;
-
-
-    /**
-     * Inventory value via RPC (lab-scoped only)
-     */
-    let inventoryValue = 0;
-    if (!allLabs) {
-      const { data, error } = await supabase
-        .rpc("inventory_total_value", { lab_id: labId });
-      if (!error) inventoryValue = data ?? 0;
-    }
-
-
-    /**
-     * Recent transactions — join through stock_batches for lab filter
-     */
-    const { data: rawTrx, error: trxError } = await supabase
-      .from("stock_transactions")
-      .select(`
-        id, transaction_type, quantity, reference, notes, created_at,
-        stock_batches (
-          laboratory_id,
-          batch_number,
-          items ( id, name, sku, unit_of_measure )
-        )
-      `)
-      .order("created_at", { ascending: false })
-      .limit(200);
-
-    if (trxError) throw trxError;
-
-    const recentTransactions = (rawTrx || [])
-      .filter(t => allLabs || t.stock_batches?.laboratory_id === labId)
-      .slice(0, 10)
-      .map(t => ({
-        id:               t.id,
-        transaction_type: t.transaction_type,
-        quantity:         t.quantity,
-        reference:        t.reference,
-        notes:            t.notes,
-        created_at:       t.created_at,
-        items:            t.stock_batches?.items ?? null,
-      }));
-
-
-    /**
-     * Stock by category
-     */
-    let catQuery = supabase
-      .from("stock_batches")
-      .select(`current_quantity, items ( categories ( name ) )`)
-      .gt("current_quantity", 0);
-    if (!allLabs) catQuery = catQuery.eq("laboratory_id", labId);
-
-    const { data: batchData, error: catError } = await catQuery;
-    if (catError) throw catError;
-
-    const categoryMap = {};
-    (batchData || []).forEach(batch => {
-      const catName = batch.items?.categories?.name ?? "Uncategorised";
-      categoryMap[catName] = (categoryMap[catName] || 0) + Number(batch.current_quantity);
-    });
-
-    const stock_by_category = Object.entries(categoryMap)
-      .map(([category, total_quantity]) => ({ category, total_quantity }))
-      .sort((a, b) => b.total_quantity - a.total_quantity);
-
-
-    return {
-      total_items:         totalItems      || 0,
-      low_stock:           lowStockCount   || 0,
-      expiring_soon:       expiringSoon    || 0,
-      inventory_value:     inventoryValue  || 0,
-      low_stock_items:     lowStockItems   || [],
-      expiring_batches:    expiringBatches || [],
-      recent_transactions: recentTransactions,
-      stock_by_category,
-      is_all_labs:         allLabs,
-    };
-
-  } catch (err) {
-    console.error("Dashboard metrics error:", err);
-    throw err;
+  // 4. Build stock totals by item
+  const stockByItem = new Map()
+  for (const batch of batches || []) {
+    addToMap(stockByItem, batch.item_id, batch.current_quantity || 0)
   }
-};
+
+  // 5. Inventory value
+  let inventoryValue = 0
+  for (const item of items || []) {
+    const stockQty = Number(stockByItem.get(item.id) || 0)
+    const unitPrice = Number(item.unit_price || 0)
+    inventoryValue += stockQty * unitPrice
+  }
+
+  // 6. Low-stock items
+  const lowStockItems = (items || [])
+    .map((item) => {
+      const currentStock = Number(stockByItem.get(item.id) || 0)
+      const threshold = Number(item.minimum_threshold || 0)
+
+      return {
+        id: item.id,
+        laboratory_id: item.laboratory_id,
+        name: item.name,
+        sku: item.sku,
+        category: item.categories?.name || null,
+        unit_of_measure: item.dispensing_unit || item.unit_of_measure || "units",
+        current_stock: currentStock,
+        minimum_threshold: threshold,
+        shortage: Math.max(0, threshold - currentStock),
+        is_low_stock: currentStock < threshold,
+      }
+    })
+    .filter((item) => item.is_low_stock)
+    .sort((a, b) => {
+      const aRatio = a.minimum_threshold > 0 ? a.current_stock / a.minimum_threshold : 1
+      const bRatio = b.minimum_threshold > 0 ? b.current_stock / b.minimum_threshold : 1
+      return aRatio - bRatio
+    })
+
+  // 7. Expiring batches (next 30 days + already expired)
+  const expiringBatches = (batches || [])
+    .filter((batch) => batch.expiry_date)
+    .map((batch) => {
+      const days = daysUntil(batch.expiry_date)
+      return {
+        id: batch.id,
+        item_id: batch.item_id,
+        laboratory_id: batch.laboratory_id,
+        batch_number: batch.batch_number,
+        current_quantity: Number(batch.current_quantity || 0),
+        quantity_received: Number(batch.quantity_received || 0),
+        expiry_date: batch.expiry_date,
+        days_to_expiry: days,
+        storage_location: batch.storage_location,
+        items: batch.items,
+      }
+    })
+    .filter((batch) => batch.days_to_expiry !== null && batch.days_to_expiry <= 30)
+    .sort((a, b) => a.days_to_expiry - b.days_to_expiry)
+
+  // 8. Stock by category
+  const categoryTotals = new Map()
+  for (const batch of batches || []) {
+    const categoryName = batch.items?.categories?.name || "Uncategorised"
+    addToMap(categoryTotals, categoryName, batch.current_quantity || 0)
+  }
+
+  const stockByCategory = Array.from(categoryTotals.entries())
+    .map(([category, total_quantity]) => ({
+      category,
+      total_quantity: Number(total_quantity),
+    }))
+    .sort((a, b) => b.total_quantity - a.total_quantity)
+
+  // 9. Alerts grouped by lab (useful for SUPER_ADMIN all-labs view)
+  const lowStockByLabMap = new Map()
+  for (const item of lowStockItems) {
+    const key = item.laboratory_id || "unknown"
+    const current = lowStockByLabMap.get(key) || {
+      laboratory_id: key,
+      count: 0,
+      items: [],
+    }
+    current.count += 1
+    current.items.push(item)
+    lowStockByLabMap.set(key, current)
+  }
+
+  const expiringByLabMap = new Map()
+  for (const batch of expiringBatches) {
+    const key = batch.laboratory_id || "unknown"
+    const current = expiringByLabMap.get(key) || {
+      laboratory_id: key,
+      count: 0,
+      batches: [],
+    }
+    current.count += 1
+    current.batches.push(batch)
+    expiringByLabMap.set(key, current)
+  }
+
+  const lowStockByLab = Array.from(lowStockByLabMap.values()).sort((a, b) => b.count - a.count)
+  const expiringByLab = Array.from(expiringByLabMap.values()).sort((a, b) => b.count - a.count)
+
+  return {
+    total_items: Array.isArray(items) ? items.length : 0,
+    low_stock: lowStockItems.length,
+    expiring_soon: expiringBatches.length,
+    inventory_value: Number(inventoryValue.toFixed(2)),
+    low_stock_items: lowStockItems.slice(0, 10),
+    expiring_batches: expiringBatches.slice(0, 10),
+    stock_by_category: stockByCategory,
+    recent_transactions: recentTransactions || [],
+    low_stock_by_lab: lowStockByLab,
+    expiring_by_lab: expiringByLab,
+    is_all_labs: isAllLabs,
+    selected_lab_id: labId || null,
+    user_is_admin: Boolean(isAdmin),
+  }
+}
