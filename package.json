@@ -16,6 +16,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.5.2",
     "uuid": "^13.0.0"
   }
 }

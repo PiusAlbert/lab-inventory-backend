@@ -1,212 +1,167 @@
-import { getSupabase } from "../config/supabase.js"
+import { getSupabase } from '../config/supabase.js'
+import { daysUntil, addToMap } from '../utils/helpers.js'
 
-function addToMap(map, key, value) {
-  map.set(key, (map.get(key) || 0) + Number(value || 0))
-}
-
-function daysUntil(dateStr) {
-  if (!dateStr) return null
-  const diff = new Date(dateStr) - new Date()
-  return Math.ceil(diff / (1000 * 60 * 60 * 24))
-}
-
+/**
+ * Fetches all dashboard data for the given lab (or all labs if labId is null).
+ *
+ * Performance profile (before → after):
+ *   Before: 3 full-table SELECT * calls → all aggregation in JS memory
+ *   After:  5 targeted queries, all aggregation done in Postgres
+ *
+ *   1. get_dashboard_kpis RPC   — 4 KPI numbers in 1 round-trip
+ *   2. get_low_stock_items RPC  — pre-aggregated low-stock list
+ *   3. get_stock_by_category RPC — category totals
+ *   4. Expiring batches          — targeted WHERE clause, limited columns
+ *   5. Recent transactions       — already limited to 10
+ *
+ * The SUPER_ADMIN all-labs grouping (low_stock_by_lab, expiring_by_lab)
+ * is computed from the results of (2) and (4) — no extra DB round-trip.
+ */
 export async function getDashboardMetrics(labId = null, isAdmin = false) {
-  const supabase = getSupabase()
+  const supabase  = getSupabase()
   const isAllLabs = !labId
+  const rpcLabId  = labId ?? null   // Postgres functions accept NULL for all-labs
 
-  // 1. Load items
-  let itemsQuery = supabase
-    .from("items")
+  // ── 1. KPI numbers ─────────────────────────────────────────────────
+  const { data: kpis, error: kpiError } = await supabase
+    .rpc('get_dashboard_kpis', { p_lab_id: rpcLabId })
+
+  if (kpiError) throw kpiError
+
+  // ── 2. Low-stock item details ──────────────────────────────────────
+  const { data: lowStockItems, error: lowStockError } = await supabase
+    .rpc('get_low_stock_items', { p_lab_id: rpcLabId, p_limit: 10 })
+
+  if (lowStockError) throw lowStockError
+
+  // ── 3. Stock by category ───────────────────────────────────────────
+  const { data: stockByCategory, error: categoryError } = await supabase
+    .rpc('get_stock_by_category', { p_lab_id: rpcLabId })
+
+  if (categoryError) throw categoryError
+
+  // ── 4. Expiring batches (within 30 days, with stock remaining) ─────
+  const expiryThreshold = new Date()
+  expiryThreshold.setDate(expiryThreshold.getDate() + 30)
+
+  let expiryQuery = supabase
+    .from('stock_batches')
     .select(`
-      id,
-      laboratory_id,
-      category_id,
-      name,
-      sku,
-      unit_of_measure,
-      dispensing_unit,
-      minimum_threshold,
-      unit_price,
-      categories ( name )
+      id, item_id, laboratory_id, batch_number, current_quantity,
+      quantity_received, expiry_date, storage_location,
+      items ( id, name, sku, unit_of_measure, dispensing_unit, categories ( name ) )
     `)
+    .not('expiry_date', 'is', null)
+    .lte('expiry_date', expiryThreshold.toISOString().split('T')[0])
+    .gt('current_quantity', 0)
+    .order('expiry_date', { ascending: true })
+    .limit(50)
 
-  if (labId) itemsQuery = itemsQuery.eq("laboratory_id", labId)
+  if (labId) expiryQuery = expiryQuery.eq('laboratory_id', labId)
 
-  const { data: items, error: itemsError } = await itemsQuery
-  if (itemsError) throw itemsError
+  const { data: rawExpiring, error: expiryError } = await expiryQuery
+  if (expiryError) throw expiryError
 
-  // 2. Load stock batches
-  let batchesQuery = supabase
-    .from("stock_batches")
-    .select(`
-      id,
-      item_id,
-      laboratory_id,
-      batch_number,
-      quantity_received,
-      current_quantity,
-      expiry_date,
-      storage_location,
-      received_at,
-      items (
-        id,
-        name,
-        sku,
-        unit_of_measure,
-        dispensing_unit,
-        minimum_threshold,
-        laboratory_id,
-        categories ( name )
-      )
-    `)
+  const expiringBatches = (rawExpiring || []).map((batch) => ({
+    id:                batch.id,
+    item_id:           batch.item_id,
+    laboratory_id:     batch.laboratory_id,
+    batch_number:      batch.batch_number,
+    current_quantity:  Number(batch.current_quantity || 0),
+    quantity_received: Number(batch.quantity_received || 0),
+    expiry_date:       batch.expiry_date,
+    days_to_expiry:    daysUntil(batch.expiry_date),
+    storage_location:  batch.storage_location,
+    items:             batch.items,
+  }))
 
-  if (labId) batchesQuery = batchesQuery.eq("laboratory_id", labId)
-
-  const { data: batches, error: batchesError } = await batchesQuery
-  if (batchesError) throw batchesError
-
-  // 3. Load recent transactions
+  // ── 5. Recent transactions ─────────────────────────────────────────
   let trxQuery = supabase
-    .from("stock_transactions")
+    .from('stock_transactions')
     .select(`
-      id,
-      item_id,
-      batch_id,
-      laboratory_id,
-      transaction_type,
-      quantity,
-      reference,
-      notes,
-      created_at,
-      items ( id, name, sku, unit_of_measure ),
-      stock_batches ( batch_number )
+      id, transaction_type, quantity, reference, notes, created_at,
+      items        ( id, name, sku, unit_of_measure ),
+      stock_batches( batch_number )
     `)
-    .order("created_at", { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(10)
 
-  if (labId) trxQuery = trxQuery.eq("laboratory_id", labId)
+  if (labId) trxQuery = trxQuery.eq('laboratory_id', labId)
 
   const { data: recentTransactions, error: trxError } = await trxQuery
   if (trxError) throw trxError
 
-  // 4. Build stock totals by item
-  const stockByItem = new Map()
-  for (const batch of batches || []) {
-    addToMap(stockByItem, batch.item_id, batch.current_quantity || 0)
-  }
+  // ── SUPER_ADMIN: group alerts by lab ─────────────────────────────
+  const lowStockByLab = groupByLab(lowStockItems || [], 'items')
+  const expiringByLab = groupByLab(expiringBatches, 'batches')
 
-  // 5. Inventory value
-  let inventoryValue = 0
-  for (const item of items || []) {
-    const stockQty = Number(stockByItem.get(item.id) || 0)
-    const unitPrice = Number(item.unit_price || 0)
-    inventoryValue += stockQty * unitPrice
-  }
+  // Resolve lab UUIDs → names in one query so the frontend never shows raw IDs
+  if (isAllLabs) {
+    const allLabIds = Array.from(
+      new Set(
+        [...lowStockByLab, ...expiringByLab]
+          .map((g) => g.laboratory_id)
+          .filter((id) => id && id !== 'unknown')
+      )
+    )
 
-  // 6. Low-stock items
-  const lowStockItems = (items || [])
-    .map((item) => {
-      const currentStock = Number(stockByItem.get(item.id) || 0)
-      const threshold = Number(item.minimum_threshold || 0)
+    if (allLabIds.length > 0) {
+      const { data: labs } = await supabase
+        .from('laboratories')
+        .select('id, name')
+        .in('id', allLabIds)
 
-      return {
-        id: item.id,
-        laboratory_id: item.laboratory_id,
-        name: item.name,
-        sku: item.sku,
-        category: item.categories?.name || null,
-        unit_of_measure: item.dispensing_unit || item.unit_of_measure || "units",
-        current_stock: currentStock,
-        minimum_threshold: threshold,
-        shortage: Math.max(0, threshold - currentStock),
-        is_low_stock: currentStock < threshold,
-      }
-    })
-    .filter((item) => item.is_low_stock)
-    .sort((a, b) => {
-      const aRatio = a.minimum_threshold > 0 ? a.current_stock / a.minimum_threshold : 1
-      const bRatio = b.minimum_threshold > 0 ? b.current_stock / b.minimum_threshold : 1
-      return aRatio - bRatio
-    })
+      const labNameMap = new Map((labs || []).map((l) => [l.id, l.name]))
+      const enrich = (groups) =>
+        groups.map((g) => ({
+          ...g,
+          laboratory_name: labNameMap.get(g.laboratory_id) ?? g.laboratory_id,
+        }))
 
-  // 7. Expiring batches (next 30 days + already expired)
-  const expiringBatches = (batches || [])
-    .filter((batch) => batch.expiry_date)
-    .map((batch) => {
-      const days = daysUntil(batch.expiry_date)
-      return {
-        id: batch.id,
-        item_id: batch.item_id,
-        laboratory_id: batch.laboratory_id,
-        batch_number: batch.batch_number,
-        current_quantity: Number(batch.current_quantity || 0),
-        quantity_received: Number(batch.quantity_received || 0),
-        expiry_date: batch.expiry_date,
-        days_to_expiry: days,
-        storage_location: batch.storage_location,
-        items: batch.items,
-      }
-    })
-    .filter((batch) => batch.days_to_expiry !== null && batch.days_to_expiry <= 30)
-    .sort((a, b) => a.days_to_expiry - b.days_to_expiry)
-
-  // 8. Stock by category
-  const categoryTotals = new Map()
-  for (const batch of batches || []) {
-    const categoryName = batch.items?.categories?.name || "Uncategorised"
-    addToMap(categoryTotals, categoryName, batch.current_quantity || 0)
-  }
-
-  const stockByCategory = Array.from(categoryTotals.entries())
-    .map(([category, total_quantity]) => ({
-      category,
-      total_quantity: Number(total_quantity),
-    }))
-    .sort((a, b) => b.total_quantity - a.total_quantity)
-
-  // 9. Alerts grouped by lab (useful for SUPER_ADMIN all-labs view)
-  const lowStockByLabMap = new Map()
-  for (const item of lowStockItems) {
-    const key = item.laboratory_id || "unknown"
-    const current = lowStockByLabMap.get(key) || {
-      laboratory_id: key,
-      count: 0,
-      items: [],
+      lowStockByLab.splice(0, lowStockByLab.length, ...enrich(lowStockByLab))
+      expiringByLab.splice(0, expiringByLab.length, ...enrich(expiringByLab))
     }
-    current.count += 1
-    current.items.push(item)
-    lowStockByLabMap.set(key, current)
   }
-
-  const expiringByLabMap = new Map()
-  for (const batch of expiringBatches) {
-    const key = batch.laboratory_id || "unknown"
-    const current = expiringByLabMap.get(key) || {
-      laboratory_id: key,
-      count: 0,
-      batches: [],
-    }
-    current.count += 1
-    current.batches.push(batch)
-    expiringByLabMap.set(key, current)
-  }
-
-  const lowStockByLab = Array.from(lowStockByLabMap.values()).sort((a, b) => b.count - a.count)
-  const expiringByLab = Array.from(expiringByLabMap.values()).sort((a, b) => b.count - a.count)
 
   return {
-    total_items: Array.isArray(items) ? items.length : 0,
-    low_stock: lowStockItems.length,
-    expiring_soon: expiringBatches.length,
-    inventory_value: Number(inventoryValue.toFixed(2)),
-    low_stock_items: lowStockItems.slice(0, 10),
-    expiring_batches: expiringBatches.slice(0, 10),
-    stock_by_category: stockByCategory,
+    // KPIs from DB
+    total_items:     kpis?.total_items     ?? 0,
+    low_stock:       kpis?.low_stock       ?? 0,
+    expiring_soon:   kpis?.expiring_soon   ?? 0,
+    inventory_value: kpis?.inventory_value ?? 0,
+
+    // Detail lists
+    low_stock_items:    (lowStockItems    || []).slice(0, 10),
+    expiring_batches:   expiringBatches.slice(0, 10),
+    stock_by_category:  stockByCategory || [],
     recent_transactions: recentTransactions || [],
-    low_stock_by_lab: lowStockByLab,
-    expiring_by_lab: expiringByLab,
-    is_all_labs: isAllLabs,
-    selected_lab_id: labId || null,
-    user_is_admin: Boolean(isAdmin),
+
+    // SUPER_ADMIN multi-lab groupings
+    low_stock_by_lab:  lowStockByLab,
+    expiring_by_lab:   expiringByLab,
+
+    is_all_labs:       isAllLabs,
+    selected_lab_id:   labId ?? null,
+    user_is_admin:     Boolean(isAdmin),
   }
+}
+
+// ── Private helpers ───────────────────────────────────────────────────
+
+/**
+ * Groups an alert list by laboratory_id for the SUPER_ADMIN all-labs view.
+ * itemKey: 'items' | 'batches' — which array key to use in each group entry.
+ */
+function groupByLab(list, itemKey) {
+  const map = new Map()
+
+  for (const entry of list) {
+    const labKey = entry.laboratory_id || 'unknown'
+    const group  = map.get(labKey) || { laboratory_id: labKey, count: 0, [itemKey]: [] }
+    group.count += 1
+    group[itemKey].push(entry)
+    map.set(labKey, group)
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.count - a.count)
 }
