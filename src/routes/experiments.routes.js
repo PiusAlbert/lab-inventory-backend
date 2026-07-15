@@ -22,7 +22,7 @@ import {
 
 const router = express.Router()
 const WRITE_ROLES  = ['STUDENT', 'TECHNICIAN', 'STORE_KEEPER', 'LAB_MANAGER', 'SUPER_ADMIN', 'ADMIN']
-const MANAGE_ROLES = ['LAB_MANAGER', 'SUPER_ADMIN', 'ADMIN']
+const MANAGE_ROLES = ['TECHNICIAN', 'LAB_MANAGER', 'SUPER_ADMIN', 'ADMIN']
 
 router.use(verifyToken)
 
