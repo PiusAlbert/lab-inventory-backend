@@ -2,31 +2,87 @@ import { getSupabase } from '../config/supabase.js'
 import { v4 as uuidv4 } from 'uuid'
 import { normalizeNullableString } from '../utils/helpers.js'
 
-// ── POST /api/auth/register  (admin-created users — existing route) ───
+// ── POST /api/auth/register  (admin-created users) ───────────────────
+/**
+ * SUPER_ADMIN and LAB_MANAGER can create staff accounts.
+ * Accounts are immediately active (no approval flow).
+ * LAB_MANAGER may only add users to their own lab and may not assign
+ * SUPER_ADMIN or LAB_MANAGER roles.
+ */
 export const registerUser = async (req, res) => {
   const supabase = getSupabase()
+
+  const { email, password, full_name, role, laboratory_id } = req.body
+
+  if (!email?.trim())     return res.status(400).json({ error: 'Email is required' })
+  if (!password)          return res.status(400).json({ error: 'Password is required' })
+  if (!full_name?.trim()) return res.status(400).json({ error: 'Full name is required' })
+  if (!role)              return res.status(400).json({ error: 'Role is required' })
+  if (!laboratory_id)     return res.status(400).json({ error: 'Laboratory is required' })
+
+  const callerRole = req.user?.role
+  const callerLab  = req.user?.profile_laboratory_id
+
+  // Only SUPER_ADMIN can assign SUPER_ADMIN or LAB_MANAGER roles
+  if (['SUPER_ADMIN', 'LAB_MANAGER'].includes(role) && callerRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Only Super Admin can assign this role' })
+  }
+
+  // LAB_MANAGER can only register users for their own lab
+  if (callerRole === 'LAB_MANAGER' && laboratory_id !== callerLab) {
+    return res.status(403).json({ error: 'You can only add users to your own laboratory' })
+  }
+
   try {
-    const { email, password, laboratory_id, role } = req.body
+    // Verify lab exists and is active
+    const { data: lab, error: labErr } = await supabase
+      .from('laboratories')
+      .select('id, name, is_active')
+      .eq('id', laboratory_id)
+      .single()
 
-    if (!email || !password || !laboratory_id || !role) {
-      return res.status(400).json({ error: 'Missing required fields' })
-    }
+    if (labErr || !lab) return res.status(400).json({ error: 'Laboratory not found' })
+    if (!lab.is_active)  return res.status(400).json({ error: 'Laboratory is not active' })
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
+    // Create the Supabase auth user (auto-confirmed, no email needed)
+    const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
+      email:         email.trim().toLowerCase(),
       password,
-      options: { data: { laboratory_id, role } },
+      email_confirm: true,
+      user_metadata: { full_name: full_name.trim() },
     })
 
-    if (error) return res.status(400).json({ error: error.message })
+    if (authErr) {
+      if (authErr.message?.toLowerCase().includes('already')) {
+        return res.status(409).json({ error: 'An account with this email already exists' })
+      }
+      return res.status(400).json({ error: authErr.message })
+    }
+
+    const userId = authData.user.id
+
+    // Create app_users row — immediately active, no approval required
+    const { error: profileErr } = await supabase.from('app_users').insert({
+      id:                  userId,
+      full_name:           full_name.trim(),
+      role,
+      laboratory_id,
+      is_active:           true,
+      registration_status: 'APPROVED',
+    })
+
+    if (profileErr) {
+      await supabase.auth.admin.deleteUser(userId)
+      throw profileErr
+    }
 
     return res.status(201).json({
-      message: 'User registered successfully',
-      user: data?.user ?? null,
+      message: `${full_name.trim()} has been registered to ${lab.name}.`,
+      user: { id: userId, full_name: full_name.trim(), role, laboratory_id },
     })
   } catch (err) {
     console.error('[registerUser]', err)
-    return res.status(500).json({ error: 'Registration failed' })
+    return res.status(500).json({ error: 'Registration failed. Please try again.' })
   }
 }
 
