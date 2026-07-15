@@ -24,7 +24,7 @@ router.get('/', verifyToken, requireRole(ALLOWED), async (req, res) => {
       .select(`
         id, full_name, role, is_active, registration_status, created_at,
         laboratory_id,
-        laboratories ( id, name )
+        laboratories!app_users_laboratory_id_fkey ( id, name )
       `)
       .neq('role', 'STUDENT')    // students have their own management page
       .order('full_name')
@@ -75,7 +75,7 @@ router.patch('/:id/toggle', verifyToken, requireRole(ALLOWED), async (req, res) 
       .from('app_users')
       .update({ is_active: !user.is_active })
       .eq('id', id)
-      .select('id, full_name, role, is_active, laboratory_id, registration_status, created_at, laboratories(id, name)')
+      .select('id, full_name, role, is_active, laboratory_id, registration_status, created_at, laboratories!app_users_laboratory_id_fkey(id, name)')
       .single()
 
     if (updateErr) throw updateErr
