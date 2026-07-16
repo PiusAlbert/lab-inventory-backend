@@ -5,7 +5,8 @@ import {
   getItemById,
   createItem,
   updateItem,
-  deleteItem
+  deleteItem,
+  importItems,
 } from "../controllers/items.controller.js";
 
 import { verifyToken }  from "../middleware/auth.middleware.js";
@@ -28,6 +29,12 @@ router.post(
   "/",
   requireRole(["LAB_MANAGER", "SUPER_ADMIN"]),
   createItem
+);
+
+router.post(
+  "/import",
+  requireRole(["LAB_MANAGER", "SUPER_ADMIN"]),
+  importItems
 );
 
 router.put(

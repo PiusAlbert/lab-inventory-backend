@@ -473,6 +473,156 @@ export const updateItem = async (req, res) => {
 }
 
 
+/**
+ * POST /api/items/import
+ * Bulk-create items from parsed CSV rows sent as JSON.
+ * Accepts { rows: [{ name, sku, category, item_type, unit_of_measure, ... }] }
+ * Returns { imported, skipped, errors: [{ row, error }] }
+ */
+export const importItems = async (req, res) => {
+  const supabase = getSupabase()
+  const labId    = req.user.laboratory_id
+  const userId   = req.user.id
+
+  if (!labId) {
+    return res.status(400).json({ error: 'Please select a laboratory before importing' })
+  }
+
+  const { rows } = req.body
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'No rows provided' })
+  }
+  if (rows.length > 500) {
+    return res.status(400).json({ error: 'Maximum 500 rows per import' })
+  }
+
+  // Category name → id cache (global categories, no lab scope)
+  const catCache = new Map()
+
+  const resolveCategoryId = async (name) => {
+    const key = name.trim().toLowerCase()
+    if (catCache.has(key)) return catCache.get(key)
+
+    const { data: existing } = await supabase
+      .from('categories')
+      .select('id')
+      .ilike('name', name.trim())
+      .maybeSingle()
+
+    if (existing) { catCache.set(key, existing.id); return existing.id }
+
+    const { data: created, error } = await supabase
+      .from('categories')
+      .insert({ name: name.trim() })
+      .select('id')
+      .single()
+
+    if (error) throw new Error(`Could not create category "${name.trim()}": ${error.message}`)
+    catCache.set(key, created.id)
+    return created.id
+  }
+
+  const VALID_TYPES = ['GENERAL', 'CHEMICAL', 'EQUIPMENT', 'CRM']
+  const result = { imported: 0, skipped: 0, errors: [] }
+
+  for (let i = 0; i < rows.length; i++) {
+    const row    = rows[i]
+    const rowNum = i + 2  // +2: 1-based index + header row
+
+    try {
+      // ── Required fields ─────────────────────────────────────────────
+      if (!row.name?.trim())              throw new Error('"name" is required')
+      if (!row.sku?.trim())               throw new Error('"sku" is required')
+      if (!row.category?.trim())          throw new Error('"category" is required')
+      if (!row.item_type?.trim())         throw new Error('"item_type" is required')
+      if (!row.unit_of_measure?.trim())   throw new Error('"unit_of_measure" is required')
+
+      const item_type = row.item_type.trim().toUpperCase()
+      if (!VALID_TYPES.includes(item_type)) {
+        throw new Error(`"item_type" must be one of: ${VALID_TYPES.join(', ')}`)
+      }
+
+      if (item_type === 'CHEMICAL' && !row.hazard_class?.trim()) {
+        throw new Error('"hazard_class" is required for CHEMICAL items')
+      }
+      if (item_type === 'EQUIPMENT' && !row.maintenance_interval_days?.toString().trim()) {
+        throw new Error('"maintenance_interval_days" is required for EQUIPMENT items')
+      }
+      if (item_type === 'CRM' && !row.certification_expiry?.trim()) {
+        throw new Error('"certification_expiry" is required for CRM items (YYYY-MM-DD)')
+      }
+
+      // ── Duplicate SKU check ──────────────────────────────────────────
+      const { data: dup } = await supabase
+        .from('items')
+        .select('id')
+        .eq('laboratory_id', labId)
+        .eq('sku', row.sku.trim())
+        .maybeSingle()
+
+      if (dup) {
+        result.skipped++
+        result.errors.push({ row: rowNum, error: `SKU "${row.sku.trim()}" already exists — skipped` })
+        continue
+      }
+
+      // ── Resolve category ─────────────────────────────────────────────
+      const category_id = await resolveCategoryId(row.category)
+
+      // ── Insert item ──────────────────────────────────────────────────
+      const itemId = uuidv4()
+      const { error: insertErr } = await supabase.from('items').insert({
+        id:                 itemId,
+        laboratory_id:      labId,
+        name:               row.name.trim(),
+        sku:                row.sku.trim(),
+        category_id,
+        item_type,
+        unit_of_measure:    row.unit_of_measure.trim(),
+        dispensing_unit:    row.dispensing_unit?.trim()   || null,
+        minimum_threshold:  safeNumber(row.minimum_threshold, 0),
+        reorder_quantity:   safeNumber(row.reorder_quantity, 0),
+        hazard_class:       row.hazard_class?.trim()       || null,
+        storage_condition:  row.storage_condition?.trim()  || null,
+        is_perishable:      String(row.is_perishable).toLowerCase() === 'true',
+        unit_price:         safeNumber(row.unit_price, 0),
+      })
+      if (insertErr) throw insertErr
+
+      // ── Extension tables ─────────────────────────────────────────────
+      if (item_type === 'CHEMICAL') {
+        await supabase.from('item_chemical_details').insert({ item_id: itemId })
+      }
+      if (item_type === 'EQUIPMENT') {
+        await supabase.from('item_equipment_details').insert({
+          item_id:                   itemId,
+          maintenance_interval_days: safePositiveNumber(row.maintenance_interval_days),
+        })
+      }
+      if (item_type === 'CRM') {
+        await supabase.from('item_reference_details').insert({
+          item_id:              itemId,
+          certification_expiry: row.certification_expiry.trim(),
+        })
+      }
+
+      result.imported++
+    } catch (err) {
+      result.errors.push({ row: rowNum, error: err.message })
+    }
+  }
+
+  await writeAuditLog({
+    userId,
+    action:   'BULK_IMPORT',
+    entity:   'items',
+    entityId: null,
+    newData:  { imported: result.imported, skipped: result.skipped, total: rows.length },
+  })
+
+  res.json(result)
+}
+
 export const deleteItem = async (req, res) => {
   const supabase = getSupabase()
   const labId    = req.user.laboratory_id ?? null
