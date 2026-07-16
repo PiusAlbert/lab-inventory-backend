@@ -7,6 +7,72 @@ import { invalidateProfileCache } from '../middleware/auth.middleware.js'
 const router = express.Router()
 const ALLOWED = ['SUPER_ADMIN', 'LAB_MANAGER']
 
+// ── Current-user profile ──────────────────────────────────────────────
+
+router.get('/me', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabase()
+    const { data, error } = await supabase
+      .from('app_users')
+      .select(`id, full_name, role, is_active, created_at,
+               laboratories!app_users_laboratory_id_fkey ( id, name )`)
+      .eq('id', req.user.id)
+      .single()
+    if (error) throw error
+    res.json({ ...data, email: req.user.email })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.patch('/me', verifyToken, async (req, res) => {
+  try {
+    const { full_name } = req.body
+    if (!full_name?.trim()) return res.status(400).json({ error: 'Name is required' })
+    const supabase = getSupabase()
+    const { data, error } = await supabase
+      .from('app_users')
+      .update({ full_name: full_name.trim() })
+      .eq('id', req.user.id)
+      .select('id, full_name, role')
+      .single()
+    if (error) throw error
+    invalidateProfileCache(req.user.id)
+    res.json(data)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.patch('/me/password', verifyToken, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body
+    if (!current_password || !new_password)
+      return res.status(400).json({ error: 'Both passwords are required' })
+    if (new_password.length < 6)
+      return res.status(400).json({ error: 'New password must be at least 6 characters' })
+
+    const supabase = getSupabase()
+
+    // Verify current password by attempting sign-in
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: req.user.email,
+      password: current_password,
+    })
+    if (signInError) return res.status(401).json({ error: 'Current password is incorrect' })
+
+    const { error: updateError } = await supabase.auth.admin.updateUserById(
+      req.user.id,
+      { password: new_password }
+    )
+    if (updateError) throw updateError
+
+    res.json({ message: 'Password updated successfully' })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 /**
  * GET /api/users
  * List staff accounts.
