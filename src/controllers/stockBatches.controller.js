@@ -33,19 +33,26 @@ const BATCH_WITH_ITEM_SELECT = `
 export const getBatches = async (req, res) => {
   const supabase = getSupabase()
   const labId    = req.user.laboratory_id ?? null
+  const page     = Math.max(1, parseInt(req.query.page  || '1', 10))
+  const limit    = Math.min(100, Math.max(1, parseInt(req.query.limit || '50', 10)))
+  const offset   = (page - 1) * limit
 
   try {
     let query = supabase
       .from('stock_batches')
-      .select(BATCH_WITH_ITEM_SELECT)
+      .select(BATCH_WITH_ITEM_SELECT, { count: 'exact' })
       .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
 
     if (labId) query = query.eq('laboratory_id', labId)
 
-    const { data, error } = await query
+    const { data, error, count } = await query
     if (error) throw error
 
-    return res.json(data)
+    return res.json({
+      data: data || [],
+      pagination: { total: count ?? 0, page, limit, pages: Math.ceil((count ?? 0) / limit) },
+    })
   } catch (err) {
     console.error('[getBatches]', err)
     return res.status(500).json({ error: 'An internal error occurred' })

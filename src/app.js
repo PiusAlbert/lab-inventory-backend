@@ -16,6 +16,7 @@ import studentsRoutes     from './routes/students.routes.js'
 import usersRoutes        from './routes/users.routes.js'
 import bookingsRoutes       from './routes/bookings.routes.js'
 import notificationsRoutes  from './routes/notifications.routes.js'
+import auditRoutes          from './routes/audit.routes.js'
 
 const app = express()
 
@@ -81,6 +82,7 @@ app.use('/api/students',      studentsRoutes)
 app.use('/api/users',         usersRoutes)
 app.use('/api/bookings',       bookingsRoutes)
 app.use('/api/notifications',  notificationsRoutes)
+app.use('/api/audit',          auditRoutes)
 
 // ── Global error handler ───────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
