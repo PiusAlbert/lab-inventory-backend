@@ -14,7 +14,8 @@ import reportsRoutes      from './routes/reports.routes.js'
 import experimentsRoutes  from './routes/experiments.routes.js'
 import studentsRoutes     from './routes/students.routes.js'
 import usersRoutes        from './routes/users.routes.js'
-import bookingsRoutes     from './routes/bookings.routes.js'
+import bookingsRoutes       from './routes/bookings.routes.js'
+import notificationsRoutes  from './routes/notifications.routes.js'
 
 const app = express()
 
@@ -49,7 +50,7 @@ if (rawCorsOrigin) {
 app.use(cors({
   origin:         corsOrigin,
   credentials:    true,
-  methods:        ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-lab-id'],
 }))
 
@@ -78,7 +79,8 @@ app.use('/api/reports',       reportsRoutes)
 app.use('/api/experiments',   experimentsRoutes)
 app.use('/api/students',      studentsRoutes)
 app.use('/api/users',         usersRoutes)
-app.use('/api/bookings',      bookingsRoutes)
+app.use('/api/bookings',       bookingsRoutes)
+app.use('/api/notifications',  notificationsRoutes)
 
 // ── Global error handler ───────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
