@@ -36,15 +36,26 @@ export const getBatches = async (req, res) => {
   const page     = Math.max(1, parseInt(req.query.page  || '1', 10))
   const limit    = Math.min(100, Math.max(1, parseInt(req.query.limit || '50', 10)))
   const offset   = (page - 1) * limit
+  const expiring = req.query.expiring === 'true'
 
   try {
     let query = supabase
       .from('stock_batches')
       .select(BATCH_WITH_ITEM_SELECT, { count: 'exact' })
-      .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1)
 
-    if (labId) query = query.eq('laboratory_id', labId)
+    if (labId)    query = query.eq('laboratory_id', labId)
+
+    if (expiring) {
+      // Include already-expired and expiring within 30 days, sorted soonest first
+      const cutoff = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
+      query = query
+        .not('expiry_date', 'is', null)
+        .lte('expiry_date', cutoff)
+        .order('expiry_date', { ascending: true })
+    } else {
+      query = query.order('created_at', { ascending: false })
+    }
 
     const { data, error, count } = await query
     if (error) throw error
