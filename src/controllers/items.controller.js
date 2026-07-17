@@ -181,6 +181,7 @@ export const searchItems = async (req, res) => {
     search   = '',
     category,
     low_stock,
+    expiring,
     page  = 1,
     limit = 20,
     sort  = 'created_at',
@@ -228,6 +229,60 @@ export const searchItems = async (req, res) => {
           page:  pageNum,
           limit: limitNum,
           pages: Math.ceil(lowStock.length / limitNum),
+        },
+      })
+    }
+
+    // ── Expiring path: items with batches expiring within 30 days ──
+    if (expiring === 'true') {
+      const cutoff = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
+      let bq = supabase
+        .from('stock_batches')
+        .select('item_id, expiry_date')
+        .not('expiry_date', 'is', null)
+        .lte('expiry_date', cutoff)
+      if (labId) bq = bq.eq('laboratory_id', labId)
+      const { data: expiringBatches, error: batchErr } = await bq
+      if (batchErr) throw batchErr
+
+      if (!expiringBatches || expiringBatches.length === 0) {
+        return res.json({ data: [], pagination: { total: 0, page: pageNum, limit: limitNum, pages: 0 } })
+      }
+
+      // nearest expiry per item
+      const expiryMap = {}
+      for (const b of expiringBatches) {
+        if (!expiryMap[b.item_id] || b.expiry_date < expiryMap[b.item_id]) {
+          expiryMap[b.item_id] = b.expiry_date
+        }
+      }
+      const itemIds = Object.keys(expiryMap)
+
+      let allQ = supabase
+        .from('items')
+        .select('*, categories(name), suppliers(name)')
+        .in('id', itemIds)
+        .order(sort, { ascending: true })
+      if (search)   allQ = allQ.or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
+      if (category) allQ = allQ.eq('category_id', category)
+
+      const { data: allItems, error: allErr } = await allQ
+      if (allErr) throw allErr
+
+      const enriched = (allItems || []).map(i => ({
+        ...i,
+        nearest_expiry_date: expiryMap[i.id] ?? null,
+      }))
+      // sort by nearest expiry ascending
+      enriched.sort((a, b) => (a.nearest_expiry_date > b.nearest_expiry_date ? 1 : -1))
+
+      return res.json({
+        data: enriched.slice(offset, offset + limitNum),
+        pagination: {
+          total: enriched.length,
+          page:  pageNum,
+          limit: limitNum,
+          pages: Math.ceil(enriched.length / limitNum),
         },
       })
     }
