@@ -37,6 +37,7 @@ export const getBatches = async (req, res) => {
   const limit    = Math.min(100, Math.max(1, parseInt(req.query.limit || '50', 10)))
   const offset   = (page - 1) * limit
   const expiring = req.query.expiring === 'true'
+  const search   = (req.query.search || '').trim()
 
   try {
     let query = supabase
@@ -44,7 +45,22 @@ export const getBatches = async (req, res) => {
       .select(BATCH_WITH_ITEM_SELECT, { count: 'exact' })
       .range(offset, offset + limit - 1)
 
-    if (labId)    query = query.eq('laboratory_id', labId)
+    if (labId) query = query.eq('laboratory_id', labId)
+
+    if (search) {
+      // Resolve item IDs matching search term first (name or SKU)
+      let itemQ = supabase
+        .from('items')
+        .select('id')
+        .or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
+      if (labId) itemQ = itemQ.eq('laboratory_id', labId)
+      const { data: matchedItems } = await itemQ
+      const itemIds = (matchedItems || []).map(i => i.id)
+
+      let orFilter = `batch_number.ilike.%${search}%,storage_location.ilike.%${search}%`
+      if (itemIds.length > 0) orFilter += `,item_id.in.(${itemIds.join(',')})`
+      query = query.or(orFilter)
+    }
 
     if (expiring) {
       // Include already-expired and expiring within 30 days, sorted soonest first
