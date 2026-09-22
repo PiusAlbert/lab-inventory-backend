@@ -577,7 +577,7 @@ export const importItems = async (req, res) => {
     return created.id
   }
 
-  const VALID_TYPES = ['GENERAL', 'CHEMICAL', 'EQUIPMENT', 'CRM']
+  const VALID_TYPES = ['GENERAL', 'CONSUMABLE', 'CHEMICAL', 'EQUIPMENT', 'CRM']
   const result = { imported: 0, skipped: 0, errors: [] }
 
   for (let i = 0; i < rows.length; i++) {
